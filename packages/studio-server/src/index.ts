@@ -4,6 +4,7 @@ export type {
   StudioApiAdapter,
   ResolvedProject,
   RenderJobState,
+  MediaProcessingJobState,
   LintResult,
   StudioSelectionResponse,
   StudioSelectionSnapshot,

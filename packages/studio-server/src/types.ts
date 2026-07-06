@@ -19,6 +19,23 @@ export interface RenderJobState {
   error?: string;
 }
 
+export interface MediaProcessingJobState {
+  id: string;
+  status: "processing" | "complete" | "failed";
+  progress: number;
+  stage?: string;
+  inputAssetPath: string;
+  outputAssetPath: string;
+  outputPath: string;
+  backgroundOutputAssetPath?: string;
+  backgroundOutputPath?: string;
+  error?: string;
+  provider?: string;
+  framesProcessed?: number;
+  durationSeconds?: number;
+  avgMsPerFrame?: number;
+}
+
 /** Lint result from the core linter. */
 export interface LintResult {
   findings: Array<{
@@ -136,6 +153,19 @@ export interface StudioApiAdapter {
      */
     distinctId?: string;
   }): RenderJobState;
+
+  startBackgroundRemoval?: (opts: {
+    project: ResolvedProject;
+    inputPath: string;
+    inputAssetPath: string;
+    outputPath: string;
+    outputAssetPath: string;
+    backgroundOutputPath?: string;
+    backgroundOutputAssetPath?: string;
+    quality: "fast" | "balanced" | "best";
+    device?: "auto" | "cpu" | "coreml" | "cuda";
+    jobId: string;
+  }) => MediaProcessingJobState;
 
   /** Optional: generate a JPEG thumbnail via Puppeteer or similar. */
   generateThumbnail?: (opts: {

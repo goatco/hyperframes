@@ -18,6 +18,7 @@ import {
 import { VERSION as version } from "../version.js";
 import { buildStudioHeadScripts, resolveCliTelemetryDistinctId } from "./telemetryIdentity.js";
 import { emitStudioRenderComplete, emitStudioRenderError } from "./studioRenderTelemetry.js";
+import { isDevMode } from "../utils/env.js";
 import {
   createStudioManualEditsRenderBodyScript,
   createStudioApi,
@@ -26,6 +27,7 @@ import {
   type StudioApiAdapter,
   type ResolvedProject,
   type RenderJobState,
+  type MediaProcessingJobState,
 } from "@hyperframes/studio-server";
 import { getElementScreenshotClip } from "@hyperframes/studio-server/screenshot-clip";
 import type { ScreenshotClip } from "@hyperframes/studio-server/screenshot-clip";
@@ -34,6 +36,12 @@ import type { RenderJob } from "@hyperframes/producer";
 const STUDIO_MANUAL_EDITS_PATH = ".hyperframes/studio-manual-edits.json";
 const REMOTE_GIF_IMG_SRC_RE =
   /<img\b[^>]*?\bsrc\s*=\s*["'](https?:\/\/[^"']+\.gif(?:[?#][^"']*)?)["'][^>]*>/gi;
+
+async function loadStudioProducer() {
+  return isDevMode()
+    ? await import("../../../producer/src/index.js")
+    : await import("@hyperframes/producer");
+}
 
 // ── Path resolution ─────────────────────────────────────────────────────────
 
@@ -302,7 +310,10 @@ export function createStudioServer(options: StudioServerOptions): StudioServer {
         // we can point it at our hot-reloadable local runtime endpoint. Inlining
         // ~150 KB of runtime body on every preview render would defeat browser
         // caching across composition edits.
-        let html = await bundleToSingleHtml(dir, { runtime: "placeholder" });
+        let html = await bundleToSingleHtml(dir, {
+          runtime: "placeholder",
+          inlineColorGradingLuts: false,
+        });
         html = html.replace(
           'data-hyperframes-preview-runtime="1" src=""',
           'data-hyperframes-preview-runtime="1" src="/api/runtime.js"',
@@ -361,7 +372,7 @@ export function createStudioServer(options: StudioServerOptions): StudioServer {
       (async () => {
         let renderJob: RenderJob | undefined;
         try {
-          const { createRenderJob, executeRenderJob } = await import("@hyperframes/producer");
+          const { createRenderJob, executeRenderJob } = await loadStudioProducer();
           const { ensureBrowser } = await import("../browser/manager.js");
 
           try {
@@ -410,6 +421,72 @@ export function createStudioServer(options: StudioServerOptions): StudioServer {
           } catch {
             /* ignore */
           }
+        }
+      })();
+
+      return state;
+    },
+
+    startBackgroundRemoval(opts) {
+      const state: MediaProcessingJobState = {
+        id: opts.jobId,
+        status: "processing",
+        progress: 0,
+        stage: "Preparing background removal",
+        inputAssetPath: opts.inputAssetPath,
+        outputAssetPath: opts.outputAssetPath,
+        outputPath: opts.outputPath,
+        ...(opts.backgroundOutputPath ? { backgroundOutputPath: opts.backgroundOutputPath } : {}),
+        ...(opts.backgroundOutputAssetPath
+          ? { backgroundOutputAssetPath: opts.backgroundOutputAssetPath }
+          : {}),
+      };
+
+      (async () => {
+        try {
+          const sourcePipelinePath = "../background-removal/pipeline.ts";
+          const pipeline = (await import("../background-removal/pipeline.js").catch(
+            () => import(sourcePipelinePath),
+          )) as typeof import("../background-removal/pipeline.js");
+          const { render } = pipeline;
+          const result = await render({
+            inputPath: opts.inputPath,
+            outputPath: opts.outputPath,
+            backgroundOutputPath: opts.backgroundOutputPath,
+            device: opts.device,
+            quality: opts.quality,
+            onProgress: (event) => {
+              if (event.kind === "info") {
+                state.stage = event.message;
+                return;
+              }
+              if (event.kind === "metadata") {
+                state.stage = `Source ${event.width}×${event.height}`;
+                state.progress = 2;
+                return;
+              }
+              const pct = event.total
+                ? Math.min(99, Math.floor((event.index / event.total) * 100))
+                : 0;
+              state.progress = pct;
+              state.stage = event.total
+                ? `Removing background ${event.index}/${event.total}`
+                : `Removing background frame ${event.index}`;
+              state.framesProcessed = event.index;
+              state.avgMsPerFrame = event.avgMsPerFrame;
+            },
+          });
+          state.status = "complete";
+          state.progress = 100;
+          state.stage = "Complete";
+          state.provider = result.provider;
+          state.framesProcessed = result.framesProcessed;
+          state.durationSeconds = result.durationSeconds;
+          state.avgMsPerFrame = result.avgMsPerFrame;
+        } catch (err) {
+          state.status = "failed";
+          state.error = err instanceof Error ? err.message : String(err);
+          state.stage = "Failed";
         }
       })();
 
