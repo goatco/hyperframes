@@ -86,6 +86,8 @@ export interface PropertyPanelProps {
   recordingState?: "idle" | "recording" | "preview";
   recordingDuration?: number;
   onToggleRecording?: () => void;
+  cropMode?: boolean;
+  onCropModeChange?: (active: boolean) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -230,6 +232,16 @@ const BOX_SHADOW_PRESETS = {
 
 export type BoxShadowPreset = keyof typeof BOX_SHADOW_PRESETS | "custom";
 
+export {
+  buildClipPathValue,
+  buildInsetClipPathSides,
+  buildInsetClipPathValue,
+  getClipPathInsetPx,
+  inferClipPathPreset,
+  parseInsetClipPathSides,
+  type ClipPathInsetSides,
+} from "./clipPathHelpers";
+
 /* ------------------------------------------------------------------ */
 /*  Shared types                                                       */
 /* ------------------------------------------------------------------ */
@@ -324,7 +336,7 @@ export function normalizeTextMetricValue(
 function splitCssFunctions(value: string): string[] {
   const functions: string[] = [];
   let current = "";
-  // fallow-ignore-next-line code-duplication -- pre-existing; surfaced in this file's diff by an unrelated line shift
+  // fallow-ignore-next-line code-duplication
   let depth = 0;
 
   for (const char of value.trim()) {
@@ -383,23 +395,6 @@ export function buildBoxShadowPresetValue(
   return BOX_SHADOW_PRESETS[preset];
 }
 
-export function inferClipPathPreset(
-  value: string | undefined,
-): "none" | "inset" | "circle" | "custom" {
-  const normalized = value?.trim();
-  if (!normalized || normalized === "none") return "none";
-  if (/^inset\(/i.test(normalized)) return "inset";
-  if (/^circle\(/i.test(normalized)) return "circle";
-  return "custom";
-}
-
-export function getClipPathInsetPx(value: string | undefined): number {
-  const match = /^inset\(\s*(-?\d+(?:\.\d+)?)px\b/i.exec(value?.trim() ?? "");
-  if (!match) return 0;
-  const parsed = Number.parseFloat(match[1]);
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
-}
-
 export function buildStrokeWidthStyleUpdates(
   nextWidth: string,
   currentBorderStyle: string | undefined,
@@ -426,23 +421,6 @@ export function buildStrokeStyleUpdates(
     updates.push(["border-width", "1px"]);
   }
   return updates;
-}
-
-export function buildClipPathValue(
-  preset: "none" | "inset" | "circle" | "custom",
-  radiusValue: number,
-  fallback: string | undefined,
-) {
-  if (preset === "custom") return fallback?.trim() || "none";
-  if (preset === "circle") return "circle(50% at 50% 50%)";
-  if (preset === "inset") {
-    return `inset(0 round ${formatNumericValue(Math.max(0, radiusValue))}px)`;
-  }
-  return "none";
-}
-
-export function buildInsetClipPathValue(insetPx: number, radiusValue: number): string {
-  return `inset(${formatNumericValue(Math.max(0, insetPx))}px round ${formatNumericValue(Math.max(0, radiusValue))}px)`;
 }
 
 export function adjustNumericToken(
@@ -490,7 +468,7 @@ export function extractBackgroundImageUrl(value: string | undefined): string {
 
 // ── GSAP runtime value readers (used by PropertyPanel) ────────────────────
 
-// fallow-ignore-next-line complexity -- pre-existing; surfaced in this file's diff by an unrelated line shift
+// fallow-ignore-next-line complexity
 // Core transform channels the panel ALWAYS reads live — even before a just-set
 // value (e.g. rotationX) has re-parsed into `gsapAnimations`. Without this the
 // cube + fields drop the prop and flicker to 0 on every commit; gsap.getProperty
