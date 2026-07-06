@@ -13,6 +13,7 @@ import { type FrameLookupTable } from "./videoFrameExtractor.js";
 import { injectVideoFramesBatch, syncVideoFrameVisibility } from "./screenshotService.js";
 import { type BeforeCaptureHook } from "./frameCapture.js";
 import { DEFAULT_CONFIG, type EngineConfig } from "../config.js";
+import { HF_COLOR_GRADING_CANVAS_ID_PREFIX } from "@hyperframes/core";
 
 export interface VideoFrameInjectorOptions extends Partial<
   Pick<EngineConfig, "frameDataUriCacheLimit" | "frameDataUriCacheBytesLimitMb">
@@ -275,16 +276,24 @@ export interface VideoElementBounds {
  */
 export async function hideVideoElements(page: Page, videoIds: string[]): Promise<void> {
   if (videoIds.length === 0) return;
-  await page.evaluate((ids: string[]) => {
-    for (const id of ids) {
-      const el = document.getElementById(id) as HTMLVideoElement | null;
-      if (el) {
-        el.style.setProperty("visibility", "hidden", "important");
-        const img = document.getElementById(`__render_frame_${id}__`);
-        if (img) img.style.setProperty("visibility", "hidden", "important");
+  await page.evaluate(
+    (ids: string[], canvasIdPrefix: string) => {
+      for (const id of ids) {
+        const el = document.getElementById(id) as HTMLVideoElement | null;
+        if (el) {
+          el.style.setProperty("visibility", "hidden", "important");
+          const img = document.getElementById(`__render_frame_${id}__`);
+          if (img) img.style.setProperty("visibility", "hidden", "important");
+          const colorGradingCanvas = document.getElementById(`${canvasIdPrefix}${id}`);
+          if (colorGradingCanvas) {
+            colorGradingCanvas.style.setProperty("visibility", "hidden", "important");
+          }
+        }
       }
-    }
-  }, videoIds);
+    },
+    videoIds,
+    HF_COLOR_GRADING_CANVAS_ID_PREFIX,
+  );
 }
 
 /**
@@ -292,16 +301,22 @@ export async function hideVideoElements(page: Page, videoIds: string[]): Promise
  */
 export async function showVideoElements(page: Page, videoIds: string[]): Promise<void> {
   if (videoIds.length === 0) return;
-  await page.evaluate((ids: string[]) => {
-    for (const id of ids) {
-      const el = document.getElementById(id) as HTMLVideoElement | null;
-      if (el) {
-        el.style.removeProperty("visibility");
-        const img = document.getElementById(`__render_frame_${id}__`);
-        if (img) img.style.removeProperty("visibility");
+  await page.evaluate(
+    (ids: string[], canvasIdPrefix: string) => {
+      for (const id of ids) {
+        const el = document.getElementById(id) as HTMLVideoElement | null;
+        if (el) {
+          el.style.removeProperty("visibility");
+          const img = document.getElementById(`__render_frame_${id}__`);
+          if (img) img.style.removeProperty("visibility");
+          const colorGradingCanvas = document.getElementById(`${canvasIdPrefix}${id}`);
+          if (colorGradingCanvas) colorGradingCanvas.style.removeProperty("visibility");
+        }
       }
-    }
-  }, videoIds);
+    },
+    videoIds,
+    HF_COLOR_GRADING_CANVAS_ID_PREFIX,
+  );
 }
 
 /**

@@ -6,9 +6,13 @@
 
 import { type Page } from "puppeteer-core";
 import { type CaptureOptions } from "../types.js";
-import { MEDIA_VISUAL_STYLE_PROPERTIES } from "@hyperframes/core";
+import {
+  HF_COLOR_GRADING_CANVAS_ID_PREFIX,
+  MEDIA_VISUAL_STYLE_PROPERTIES,
+} from "@hyperframes/core";
 
 export const cdpSessionCache = new WeakMap<Page, import("puppeteer-core").CDPSession>();
+const COLOR_GRADING_SOURCE_HIDDEN_ATTR = "data-hf-color-grading-source-hidden";
 
 export async function getCdpSession(page: Page): Promise<import("puppeteer-core").CDPSession> {
   let client = cdpSessionCache.get(page);
@@ -279,12 +283,12 @@ const DOM_LAYER_MASK_PREV_PRIORITY_ATTR = "data-hf-dom-layer-mask-prev-priority"
  *
  * 1. Inject a stylesheet that hides every body descendant
  *    (`body * { visibility: hidden !important }`) and re-shows the layer's
- *    elements (and their descendants and their injected `__render_frame_*`
- *    siblings) via `visibility: visible !important`. CSS `visibility: visible`
+ *    elements (and their descendants, injected `__render_frame_*` siblings,
+ *    and media color-grading canvases) via `visibility: visible !important`. CSS `visibility: visible`
  *    on a descendant overrides an ancestor's `visibility: hidden`, so deep
  *    layer elements remain visible even though intermediate parents are
  *    hidden by the mass-hide rule.
- * 2. Inline-hide each `extraHideId` (and its `__render_frame_*` sibling) with
+ * 2. Inline-hide each `extraHideId` (and its render-frame/color-grading siblings) with
  *    `visibility: hidden !important`, while first recording its previous
  *    inline visibility. Inline `!important` beats stylesheet `!important`,
  *    so this overrides the show rule for elements that fall under a show
@@ -328,6 +332,7 @@ export async function applyDomLayerMask(
       hiddenAttr: string;
       prevVisibilityAttr: string;
       prevPriorityAttr: string;
+      canvasIdPrefix: string;
     }) => {
       const existing = document.getElementById(args.styleId);
       if (existing) existing.remove();
@@ -390,6 +395,8 @@ export async function applyDomLayerMask(
         showSelectors.push(`#${escaped}`, `#${escaped} *`);
         const renderEscaped = CSS.escape(`__render_frame_${id}__`);
         showSelectors.push(`#${renderEscaped}`, `#${renderEscaped} *`);
+        const colorGradingEscaped = CSS.escape(`${args.canvasIdPrefix}${id}`);
+        showSelectors.push(`#${colorGradingEscaped}`, `#${colorGradingEscaped} *`);
       }
 
       const massHideRule = "body *{visibility:hidden !important;}";
@@ -416,6 +423,10 @@ export async function applyDomLayerMask(
         if (img) {
           rememberAndHideElement(img);
         }
+        const colorGradingCanvas = document.getElementById(`${args.canvasIdPrefix}${id}`);
+        if (colorGradingCanvas instanceof HTMLElement) {
+          rememberAndHideElement(colorGradingCanvas);
+        }
       }
     },
     {
@@ -425,6 +436,7 @@ export async function applyDomLayerMask(
       hiddenAttr: DOM_LAYER_MASK_HIDDEN_ATTR,
       prevVisibilityAttr: DOM_LAYER_MASK_PREV_VISIBILITY_ATTR,
       prevPriorityAttr: DOM_LAYER_MASK_PREV_PRIORITY_ATTR,
+      canvasIdPrefix: HF_COLOR_GRADING_CANVAS_ID_PREFIX,
     },
   );
 }
@@ -434,7 +446,7 @@ export async function applyDomLayerMask(
  *
  * Removes the mask stylesheet and restores the inline `visibility` values
  * temporarily overwritten for hidden timed descendants, `extraHideIds`, and
- * their `__render_frame_*` siblings.
+ * their render-frame/color-grading siblings.
  *
  * IMPORTANT: We do NOT strip inline `opacity` here. applyDomLayerMask only
  * ever sets `visibility` (never `opacity`), so any inline opacity present on
@@ -492,7 +504,11 @@ export async function injectVideoFramesBatch(
 ): Promise<string[]> {
   if (updates.length === 0) return [];
   return await page.evaluate(
-    async (items: Array<{ videoId: string; dataUri: string }>, visualProperties: string[]) => {
+    async (
+      items: Array<{ videoId: string; dataUri: string }>,
+      visualProperties: string[],
+      colorGradingSourceHiddenAttr: string,
+    ) => {
       const injectedIds: string[] = [];
       const pendingDecodes: Array<Promise<void>> = [];
       const replacementLayoutProperties = new Set([
@@ -570,7 +586,11 @@ export async function injectVideoFramesBatch(
         // `opacity: 0`), so its computed opacity is preserved across seeks
         // and accurately reflects the user's intent on every frame.
         const opacityParsed = parseFloat(computedStyle.opacity);
-        const computedOpacity = Number.isNaN(opacityParsed) ? 1 : opacityParsed;
+        const computedOpacity = video.hasAttribute(colorGradingSourceHiddenAttr)
+          ? 1
+          : Number.isNaN(opacityParsed)
+            ? 1
+            : opacityParsed;
 
         if (isNewImage) {
           img = document.createElement("img");
@@ -655,6 +675,7 @@ export async function injectVideoFramesBatch(
     },
     updates,
     [...MEDIA_VISUAL_STYLE_PROPERTIES],
+    COLOR_GRADING_SOURCE_HIDDEN_ATTR,
   );
 }
 
@@ -662,59 +683,66 @@ export async function syncVideoFrameVisibility(
   page: Page,
   activeVideoIds: string[],
 ): Promise<void> {
-  await page.evaluate((ids: string[]) => {
-    // Mirror the ancestor-visibility guard from `injectVideoFramesBatch`.
-    // See that copy for the full rationale on why `visibility: hidden` is
-    // narrowed to sub-composition hosts only — keep these two functions in
-    // sync so the inactive-arm decision matches the inject-time decision.
-    const isVisualAncestorHidden = (el: HTMLElement): boolean => {
-      let parent = el.parentElement;
-      while (parent !== null && parent !== document.documentElement) {
-        const computed = window.getComputedStyle(parent);
-        if (computed.display === "none") return true;
-        if (
-          computed.visibility === "hidden" &&
-          (parent.hasAttribute("data-composition-src") ||
-            parent.hasAttribute("data-composition-file"))
-        ) {
-          return true;
+  await page.evaluate(
+    (ids: string[], colorGradingSourceHiddenAttr: string) => {
+      // Mirror the ancestor-visibility guard from `injectVideoFramesBatch`.
+      // See that copy for the full rationale on why `visibility: hidden` is
+      // narrowed to sub-composition hosts only — keep these two functions in
+      // sync so the inactive-arm decision matches the inject-time decision.
+      const isVisualAncestorHidden = (el: HTMLElement): boolean => {
+        let parent = el.parentElement;
+        while (parent !== null && parent !== document.documentElement) {
+          const computed = window.getComputedStyle(parent);
+          if (computed.display === "none") return true;
+          if (
+            computed.visibility === "hidden" &&
+            (parent.hasAttribute("data-composition-src") ||
+              parent.hasAttribute("data-composition-file"))
+          ) {
+            return true;
+          }
+          parent = parent.parentElement;
         }
-        parent = parent.parentElement;
+        return false;
+      };
+      const active = new Set(ids);
+      const videos = Array.from(
+        document.querySelectorAll("video[data-start]"),
+      ) as HTMLVideoElement[];
+      for (const video of videos) {
+        const img = video.nextElementSibling as HTMLElement | null;
+        const hasImg = img && img.classList.contains("__render_frame__");
+        const ancestorHidden = isVisualAncestorHidden(video);
+        if (active.has(video.id) && !ancestorHidden) {
+          // Active video: show injected <img>, hide native <video>.
+          // Do NOT clobber inline opacity here — GSAP-controlled opacity must
+          // survive until injectVideoFramesBatch reads it via getComputedStyle.
+          // visibility:hidden alone hides the native element without affecting
+          // its computed opacity.
+          video.style.setProperty("visibility", "hidden", "important");
+          video.style.setProperty("pointer-events", "none", "important");
+          if (hasImg) {
+            if (video.hasAttribute(colorGradingSourceHiddenAttr)) img.style.opacity = "1";
+            img.style.visibility = "visible";
+          }
+        } else {
+          // Inactive (or ancestor-hidden) video: hide both. Use visibility only
+          // (never opacity) so we never clobber GSAP-controlled inline opacity.
+          // Use `!important` on the <img> hide so `applyDomLayerMask`'s
+          // important stylesheet rule (`#${showId} *{visibility:visible !important}`)
+          // cannot revive a stale frame when the sub-comp host lands in the
+          // active layer's `show` set — same mask-defense reasoning as the
+          // `isVisualAncestorHidden` branch in `injectVideoFramesBatch`.
+          video.style.removeProperty("display");
+          video.style.setProperty("visibility", "hidden", "important");
+          video.style.setProperty("pointer-events", "none", "important");
+          if (hasImg) {
+            img.style.setProperty("visibility", "hidden", "important");
+          }
+        }
       }
-      return false;
-    };
-    const active = new Set(ids);
-    const videos = Array.from(document.querySelectorAll("video[data-start]")) as HTMLVideoElement[];
-    for (const video of videos) {
-      const img = video.nextElementSibling as HTMLElement | null;
-      const hasImg = img && img.classList.contains("__render_frame__");
-      const ancestorHidden = isVisualAncestorHidden(video);
-      if (active.has(video.id) && !ancestorHidden) {
-        // Active video: show injected <img>, hide native <video>.
-        // Do NOT clobber inline opacity here — GSAP-controlled opacity must
-        // survive until injectVideoFramesBatch reads it via getComputedStyle.
-        // visibility:hidden alone hides the native element without affecting
-        // its computed opacity.
-        video.style.setProperty("visibility", "hidden", "important");
-        video.style.setProperty("pointer-events", "none", "important");
-        if (hasImg) {
-          img.style.visibility = "visible";
-        }
-      } else {
-        // Inactive (or ancestor-hidden) video: hide both. Use visibility only
-        // (never opacity) so we never clobber GSAP-controlled inline opacity.
-        // Use `!important` on the <img> hide so `applyDomLayerMask`'s
-        // important stylesheet rule (`#${showId} *{visibility:visible !important}`)
-        // cannot revive a stale frame when the sub-comp host lands in the
-        // active layer's `show` set — same mask-defense reasoning as the
-        // `isVisualAncestorHidden` branch in `injectVideoFramesBatch`.
-        video.style.removeProperty("display");
-        video.style.setProperty("visibility", "hidden", "important");
-        video.style.setProperty("pointer-events", "none", "important");
-        if (hasImg) {
-          img.style.setProperty("visibility", "hidden", "important");
-        }
-      }
-    }
-  }, activeVideoIds);
+    },
+    activeVideoIds,
+    COLOR_GRADING_SOURCE_HIDDEN_ATTR,
+  );
 }

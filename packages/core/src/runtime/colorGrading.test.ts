@@ -4,6 +4,8 @@ import { createColorGradingRuntime, type RuntimeColorGradingApi } from "./colorG
 
 let lastUniform1f: ReturnType<typeof vi.fn> | null = null;
 let lastUniform3f: ReturnType<typeof vi.fn> | null = null;
+let lastShaderSources: string[] = [];
+let texImage2DCalls: unknown[][] = [];
 
 const IDENTITY_2 = `
 LUT_3D_SIZE 2
@@ -17,7 +19,7 @@ LUT_3D_SIZE 2
 1 1 1
 `;
 
-function createMockWebGl(): WebGLRenderingContext {
+function createMockWebGl(options: { failMediaUpload?: boolean } = {}): WebGLRenderingContext {
   const shader = {};
   const program = {};
   const texture = {};
@@ -45,11 +47,18 @@ function createMockWebGl(): WebGLRenderingContext {
     STATIC_DRAW: 0x88e4,
     TEXTURE0: 0x84c0,
     TEXTURE1: 0x84c1,
+    TEXTURE2: 0x84c2,
+    TEXTURE3: 0x84c3,
     FLOAT: 0x1406,
     TRIANGLE_STRIP: 0x0005,
     UNPACK_FLIP_Y_WEBGL: 0x9240,
+    FRAMEBUFFER: 0x8d40,
+    COLOR_ATTACHMENT0: 0x8ce0,
+    FRAMEBUFFER_COMPLETE: 0x8cd5,
     createShader: vi.fn(() => shader),
-    shaderSource: vi.fn(),
+    shaderSource: vi.fn((_shader, source: string) => {
+      lastShaderSources.push(source);
+    }),
     compileShader: vi.fn(),
     getShaderParameter: vi.fn(() => true),
     getShaderInfoLog: vi.fn(() => ""),
@@ -63,7 +72,17 @@ function createMockWebGl(): WebGLRenderingContext {
     createTexture: vi.fn(() => texture),
     bindTexture: vi.fn(),
     texParameteri: vi.fn(),
-    texImage2D: vi.fn(),
+    texImage2D: vi.fn((...args: unknown[]) => {
+      texImage2DCalls.push(args);
+      if (options.failMediaUpload && args.length === 6) {
+        throw new Error("Media cannot be sampled by WebGL");
+      }
+    }),
+    createFramebuffer: vi.fn(() => ({})),
+    bindFramebuffer: vi.fn(),
+    framebufferTexture2D: vi.fn(),
+    checkFramebufferStatus: vi.fn(() => 0x8cd5),
+    deleteFramebuffer: vi.fn(),
     createBuffer: vi.fn(() => buffer),
     bindBuffer: vi.fn(),
     bufferData: vi.fn(),
@@ -81,6 +100,7 @@ function createMockWebGl(): WebGLRenderingContext {
     vertexAttribPointer: vi.fn(),
     drawArrays: vi.fn(),
     deleteTexture: vi.fn(),
+    deleteBuffer: vi.fn(),
   } as unknown as WebGLRenderingContext;
 }
 
@@ -113,12 +133,12 @@ function makeDrawableVideo(): HTMLVideoElement {
   return video;
 }
 
-function stubCubeLutFetch(): ReturnType<typeof vi.fn> {
+function stubCubeLutFetch(text = IDENTITY_2): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(() =>
     Promise.resolve({
       ok: true,
       status: 200,
-      text: () => Promise.resolve(IDENTITY_2),
+      text: () => Promise.resolve(text),
     }),
   );
   vi.stubGlobal("fetch", fetchMock);
@@ -133,6 +153,8 @@ describe("createColorGradingRuntime", () => {
     document.body.innerHTML = "";
     lastUniform1f = null;
     lastUniform3f = null;
+    lastShaderSources = [];
+    texImage2DCalls = [];
     getContextSpy = vi
       .spyOn(HTMLCanvasElement.prototype, "getContext")
       .mockImplementation((type: string) =>
@@ -172,6 +194,7 @@ describe("createColorGradingRuntime", () => {
   it("re-hides source media after timeline visibility sync", () => {
     const { video, canvas } = startRuntimeWithVideo();
 
+    expect(canvas.id).toBe("__hf_color_grading_hero-video");
     expect(video.style.getPropertyValue("visibility")).toBe("");
     expect(video.style.getPropertyValue("opacity")).toBe("0");
     expect(video.style.getPropertyPriority("opacity")).toBe("important");
@@ -258,6 +281,70 @@ describe("createColorGradingRuntime", () => {
     expect(video.style.getPropertyPriority("opacity")).toBe("important");
   });
 
+  it("keeps the canvas visible when producer render-frame injection hides the source video", () => {
+    const video = makeDrawableVideo();
+    Object.defineProperty(video, "readyState", {
+      value: HTMLMediaElement.HAVE_METADATA,
+      configurable: true,
+    });
+    Object.defineProperty(video, "videoWidth", { value: 0, configurable: true });
+    Object.defineProperty(video, "videoHeight", { value: 0, configurable: true });
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+    const canvas = document.querySelector<HTMLCanvasElement>("[data-hf-color-grading-canvas]");
+    if (!canvas) throw new Error("Expected color grading canvas");
+    expect(canvas.style.display).toBe("none");
+
+    const frame = document.createElement("img");
+    frame.id = "__render_frame_hero-video__";
+    frame.className = "__render_frame__";
+    frame.style.visibility = "visible";
+    frame.style.opacity = "0.75";
+    Object.defineProperty(frame, "complete", { value: true, configurable: true });
+    Object.defineProperty(frame, "naturalWidth", { value: 640, configurable: true });
+    Object.defineProperty(frame, "naturalHeight", { value: 360, configurable: true });
+    video.parentNode?.insertBefore(frame, canvas);
+    video.style.setProperty("visibility", "hidden", "important");
+
+    runtime.redraw();
+
+    expect(canvas.style.display).toBe("block");
+    expect(canvas.style.visibility).toBe("visible");
+    expect(canvas.style.opacity).toBe("0.75");
+  });
+
+  it("moves the canvas above producer render-frame images before capture", () => {
+    const video = makeDrawableVideo();
+    Object.defineProperty(video, "readyState", {
+      value: HTMLMediaElement.HAVE_METADATA,
+      configurable: true,
+    });
+    Object.defineProperty(video, "videoWidth", { value: 0, configurable: true });
+    Object.defineProperty(video, "videoHeight", { value: 0, configurable: true });
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+    const canvas = document.querySelector<HTMLCanvasElement>("[data-hf-color-grading-canvas]");
+    if (!canvas) throw new Error("Expected color grading canvas");
+
+    const frame = document.createElement("img");
+    frame.id = "__render_frame_hero-video__";
+    frame.className = "__render_frame__";
+    Object.defineProperty(frame, "complete", { value: true, configurable: true });
+    Object.defineProperty(frame, "naturalWidth", { value: 640, configurable: true });
+    Object.defineProperty(frame, "naturalHeight", { value: 360, configurable: true });
+    video.parentNode?.insertBefore(frame, canvas.nextSibling);
+
+    expect(video.nextSibling).toBe(canvas);
+    expect(canvas.nextSibling).toBe(frame);
+
+    runtime.redraw();
+
+    expect(video.nextSibling).toBe(frame);
+    expect(frame.nextSibling).toBe(canvas);
+  });
+
   it("updates before-after compare uniforms without changing the source grading", () => {
     const video = makeDrawableVideo();
     document.body.appendChild(video);
@@ -277,6 +364,86 @@ describe("createColorGradingRuntime", () => {
     expect(video.getAttribute(HF_COLOR_GRADING_ATTR)).toBe(
       serializeHfColorGrading({ adjust: { exposure: 0.5 } }),
     );
+  });
+
+  it("passes finishing detail uniforms into the shader", () => {
+    const video = makeDrawableVideo();
+    video.setAttribute(
+      HF_COLOR_GRADING_ATTR,
+      serializeHfColorGrading({
+        adjust: { vibrance: 0.35 },
+        details: {
+          vignette: 0.4,
+          vignetteMidpoint: 0.35,
+          vignetteRoundness: -0.25,
+          vignetteFeather: 0.8,
+          grain: 0.2,
+          grainSize: 0.7,
+          grainRoughness: 0.3,
+        },
+        effects: { blur: 0.3, pixelate: 0.1 },
+      }),
+    );
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+
+    if (!lastUniform1f) throw new Error("Expected WebGL uniform calls");
+    expect(lastUniform1f).toHaveBeenCalledWith("u_vibrance", 0.35);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_vignette", 0.4);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_vignetteMidpoint", 0.35);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_vignetteRoundness", -0.25);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_vignetteFeather", 0.8);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_grain", 0.2);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_grainSize", 0.7);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_grainRoughness", 0.3);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_grainSeed", expect.any(Number));
+    expect(lastUniform1f).toHaveBeenCalledWith("u_blur", 0.3);
+    expect(lastUniform1f).toHaveBeenCalledWith("u_pixelate", 0.1);
+  });
+
+  it("uses the effected media sample as the graded shader input", () => {
+    const video = makeDrawableVideo();
+    video.setAttribute(HF_COLOR_GRADING_ATTR, serializeHfColorGrading({ effects: { blur: 0.25 } }));
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+
+    const fragment = lastShaderSources.find((source) => source.includes("sampleMedia"));
+    expect(fragment).toContain("vec4 originalSample = sampleSource(uv);");
+    expect(fragment).toContain("vec4 sampleColor = sampleMedia(uv);");
+    expect(fragment).toContain("uniform sampler2D u_blurSource;");
+    expect(fragment).toContain("floor(clamp(uv, vec2(0.0), vec2(0.999999)) * cells)");
+    expect(fragment).toContain("vec2 vignetteAspect");
+    expect(fragment).toContain("float vibranceWeight");
+    expect(fragment).toContain("float vignettePower");
+    expect(fragment).toContain("float grainMask");
+    expect(fragment).toContain("float grainPixelSize");
+    expect(fragment).toContain("float blackPoint = clamp(u_blacks * 0.18");
+    expect(fragment).toContain("float whitePoint = clamp(1.0 - u_whites * 0.18");
+    expect(fragment).toContain("vec3 color = sampleColor.rgb * pow(2.0, u_exposure);");
+    expect(fragment).not.toContain("sampleSoft");
+    const blurFragment = lastShaderSources.find((source) =>
+      source.includes("uniform vec2 u_direction;"),
+    );
+    expect(blurFragment).toContain("stepUv * 12.0");
+    expect(blurFragment).toContain("color.rgb *= color.a;");
+    expect(blurFragment).toContain("color.rgb /= color.a;");
+  });
+
+  it("renders blur passes at media resolution to avoid blocky high-strength blur", () => {
+    const video = makeDrawableVideo();
+    video.setAttribute(HF_COLOR_GRADING_ATTR, serializeHfColorGrading({ effects: { blur: 1 } }));
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+
+    expect(texImage2DCalls.some((args) => args[3] === 640 && args[4] === 360)).toBe(true);
+    expect(
+      lastUniform1f?.mock.calls.some(
+        ([name, value]) => name === "u_radius" && typeof value === "number" && value > 30,
+      ),
+    ).toBe(true);
   });
 
   it("loads cube LUTs and enables LUT uniforms", async () => {
@@ -304,5 +471,86 @@ describe("createColorGradingRuntime", () => {
     expect(lastUniform3f).toHaveBeenCalledWith("u_lutDomainMin", 0, 0, 0);
     expect(lastUniform3f).toHaveBeenCalledWith("u_lutDomainMax", 1, 1, 1);
     expect(runtime.getStatus("#hero-video").message).toBe("Shader + LUT active");
+  });
+
+  it("bounds the runtime LUT cache", async () => {
+    const fetchMock = stubCubeLutFetch();
+    const origin = window.location.origin;
+    document.head.innerHTML = `<base href="${origin}/api/projects/demo/preview/">`;
+    const { video } = startRuntimeWithVideo();
+
+    for (let index = 0; index < 17; index += 1) {
+      runtime?.setGrading(`#${video.id}`, {
+        lut: { src: `assets/luts/${index}.cube`, intensity: 1 },
+      });
+      await flushLutLoad();
+    }
+    runtime?.setGrading(`#${video.id}`, {
+      lut: { src: "assets/luts/0.cube", intensity: 1 },
+    });
+    await flushLutLoad();
+
+    const firstUrl = `${origin}/api/projects/demo/preview/assets/luts/0.cube`;
+    expect(fetchMock.mock.calls.filter(([url]) => url === firstUrl)).toHaveLength(2);
+  });
+
+  it("reports unsupported LUT files in runtime status", async () => {
+    stubCubeLutFetch(`
+      LUT_1D_SIZE 2
+      0 0 0
+      1 1 1
+    `);
+    const origin = window.location.origin;
+    document.head.innerHTML = `<base href="${origin}/api/projects/demo/preview/">`;
+    const video = makeDrawableVideo();
+    video.setAttribute(
+      HF_COLOR_GRADING_ATTR,
+      serializeHfColorGrading({ lut: { src: "assets/luts/oned.cube", intensity: 1 } }),
+    );
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+    await flushLutLoad();
+
+    expect(runtime.getStatus("#hero-video").message).toContain(
+      "LUT error: 1D cube LUTs are not supported yet",
+    );
+  });
+
+  it("reports media texture upload failures in runtime status", () => {
+    getContextSpy.mockImplementation((type: string) =>
+      type === "webgl" ? createMockWebGl({ failMediaUpload: true }) : null,
+    );
+    const video = makeDrawableVideo();
+    document.body.appendChild(video);
+
+    runtime = createColorGradingRuntime();
+
+    expect(runtime.getStatus("#hero-video")).toEqual({
+      state: "unavailable",
+      message: "Media cannot be sampled by WebGL",
+    });
+  });
+
+  it("falls back to the source media on WebGL context loss and redraws after restore", () => {
+    const { video, canvas } = startRuntimeWithVideo();
+
+    const lost = new Event("webglcontextlost", { cancelable: true });
+    canvas.dispatchEvent(lost);
+
+    expect(lost.defaultPrevented).toBe(true);
+    expect(canvas.style.display).toBe("none");
+    expect(video.hasAttribute("data-hf-color-grading-source-hidden")).toBe(false);
+    expect(video.style.getPropertyValue("opacity")).toBe("");
+    expect(runtime?.getStatus("#hero-video")).toEqual({
+      state: "unavailable",
+      message: "WebGL context lost",
+    });
+
+    canvas.dispatchEvent(new Event("webglcontextrestored"));
+
+    expect(runtime?.getStatus("#hero-video").state).toBe("active");
+    expect(video.hasAttribute("data-hf-color-grading-source-hidden")).toBe(true);
+    expect(video.style.getPropertyValue("opacity")).toBe("0");
   });
 });

@@ -5,11 +5,12 @@ import { type Page } from "puppeteer-core";
 import {
   pageScreenshotCapture,
   cdpSessionCache,
+  applyDomLayerMask,
+  removeDomLayerMask,
   injectVideoFramesBatch,
   syncVideoFrameVisibility,
   shouldDefaultCaptureBeyondViewport,
-  applyDomLayerMask,
-  removeDomLayerMask,
+  DOM_LAYER_MASK_STYLE_ID,
 } from "./screenshotService.js";
 
 // Stub a Page + CDPSession just enough that pageScreenshotCapture can call
@@ -268,7 +269,7 @@ describe("video-frame injection respects ancestor visibility", () => {
 
   function setupHostHiddenScenario(
     hostStyle: StyleLike,
-    options: { hostAttribute?: HostAttribute } = {},
+    options: { hostAttribute?: HostAttribute; videoStyle?: StyleLike } = {},
   ) {
     const hostAttribute = options.hostAttribute ?? "data-composition-src";
     const hostAttrMarkup =
@@ -310,7 +311,13 @@ describe("video-frame injection respects ancestor visibility", () => {
     const styles = new Map<Element, StyleLike>();
     styles.set(host, hostStyle);
     styles.set(pipFrame, {});
-    styles.set(video, { opacity: "1", objectFit: "cover", objectPosition: "center", zIndex: "1" });
+    styles.set(video, {
+      opacity: "1",
+      objectFit: "cover",
+      objectPosition: "center",
+      zIndex: "1",
+      ...options.videoStyle,
+    });
 
     Object.defineProperty(window, "getComputedStyle", {
       configurable: true,
@@ -498,6 +505,47 @@ describe("video-frame injection respects ancestor visibility", () => {
     expect(sibling?.style.visibility).toBe("visible");
   });
 
+  it("does not copy color-grading source suppression opacity to the injected frame", async () => {
+    const { teardown, setup } = withGlobals(
+      setupHostHiddenScenario({}, { videoStyle: { opacity: "0" } }),
+    );
+    setup.video.setAttribute("data-hf-color-grading-source-hidden", "true");
+
+    try {
+      await injectVideoFramesBatch(passthroughPage(), [
+        {
+          videoId: "pip",
+          dataUri:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=",
+        },
+      ]);
+    } finally {
+      teardown();
+    }
+
+    const sibling = setup.video.nextElementSibling as HTMLElement | null;
+    expect(sibling?.classList.contains("__render_frame__")).toBe(true);
+    expect(sibling?.style.opacity).toBe("1");
+  });
+
+  it("repairs stale injected-frame opacity while syncing color-graded active videos", async () => {
+    const { teardown, setup } = withGlobals(setupHostHiddenScenario({}));
+    setup.video.setAttribute("data-hf-color-grading-source-hidden", "true");
+    const seededImg = setup.document.createElement("img");
+    seededImg.classList.add("__render_frame__");
+    seededImg.style.opacity = "0";
+    setup.video.parentNode?.insertBefore(seededImg, setup.video.nextSibling);
+
+    try {
+      await syncVideoFrameVisibility(passthroughPage(), ["pip"]);
+    } finally {
+      teardown();
+    }
+
+    expect(seededImg.style.opacity).toBe("1");
+    expect(seededImg.style.visibility).toBe("visible");
+  });
+
   it("syncVideoFrameVisibility shows the replacement <img> when a plain [data-start] host is visibility:hidden", async () => {
     const { teardown, setup } = withGlobals(
       setupHostHiddenScenario({ visibility: "hidden" }, { hostAttribute: "data-start" }),
@@ -668,6 +716,28 @@ describe("video-frame injection respects ancestor visibility", () => {
       expect(visibleCaption.style.visibility).toBe("visible");
       expect(clip.style.visibility).toBe("hidden");
       expect(renderFrame.style.visibility).toBe("hidden");
+    } finally {
+      teardown();
+    }
+  });
+
+  it("applyDomLayerMask carries color grading canvases with their media element", async () => {
+    const { window, document } = parseHTML(
+      '<html><head></head><body><div id="root"><video id="pip"></video><canvas id="__hf_color_grading_pip"></canvas></div></body></html>',
+    );
+    const teardown = installDomMaskGlobals({ window, document });
+    try {
+      await applyDomLayerMask(passthroughPage(), ["pip"], []);
+      expect(document.getElementById(DOM_LAYER_MASK_STYLE_ID)?.textContent).toContain(
+        "#__hf_color_grading_pip",
+      );
+
+      await applyDomLayerMask(passthroughPage(), ["root"], ["pip"]);
+      const canvas = document.getElementById("__hf_color_grading_pip") as HTMLCanvasElement;
+      expect(canvas.style.visibility).toBe("hidden");
+
+      await removeDomLayerMask(passthroughPage(), ["pip"]);
+      expect(canvas.style.getPropertyValue("visibility") || "").toBe("");
     } finally {
       teardown();
     }
