@@ -487,7 +487,12 @@ export function StudioApp() {
                     refreshCaptureFrameTime={frameCapture.refreshCaptureFrameTime}
                     inspectorButtonActive={inspectorButtonActive}
                     inspectorPanelActive={inspectorPanelActive}
-                    onExport={() => void renderQueue.startRender(undefined)}
+                    onExport={() => {
+                      void (async () => {
+                        await previewPersistence.waitForPendingDomEditSaves();
+                        await renderQueue.startRender(undefined);
+                      })();
+                    }}
                   />
                   {previewPersistence.domEditSaveQueuePaused && (
                     <SaveQueuePausedBanner

@@ -18,7 +18,19 @@ export interface PropertyPanelProps {
   onSetStyle: (prop: string, value: string) => void | Promise<void>;
   onSetAttribute: (attr: string, value: string) => void | Promise<void>;
   onSetAttributeLive: (attr: string, value: string | null) => void | Promise<void>;
+  onApplyColorGradingScope?: (
+    scope: "source-file" | "project",
+    value: string | null,
+  ) => Promise<{ changedFiles: number; changedElements: number }>;
   onSetHtmlAttribute: (attr: string, value: string | null) => void | Promise<void>;
+  onRemoveBackground?: (
+    inputPath: string,
+    options: {
+      createBackgroundPlate?: boolean;
+      quality?: "fast" | "balanced" | "best";
+      onProgress?: (progress: BackgroundRemovalProgress) => void;
+    },
+  ) => Promise<BackgroundRemovalResult>;
   onSetManualOffset: (element: DomEditSelection, next: { x: number; y: number }) => void;
   onSetManualSize: (element: DomEditSelection, next: { width: number; height: number }) => void;
   onSetManualRotation: (element: DomEditSelection, next: { angle: number }) => void;
@@ -86,6 +98,22 @@ export interface PropertyPanelProps {
   recordingState?: "idle" | "recording" | "preview";
   recordingDuration?: number;
   onToggleRecording?: () => void;
+}
+
+export interface BackgroundRemovalProgress {
+  status: "processing" | "complete" | "failed";
+  progress: number;
+  stage?: string;
+  outputPath?: string;
+  backgroundOutputPath?: string;
+  error?: string;
+  provider?: string;
+}
+
+export interface BackgroundRemovalResult {
+  outputPath: string;
+  backgroundOutputPath?: string;
+  provider?: string;
 }
 
 /* ------------------------------------------------------------------ */

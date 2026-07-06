@@ -8,6 +8,7 @@ import {
 import { STUDIO_MOTION_PATH } from "../components/editor/studioMotion";
 import type { EditHistoryKind } from "../utils/editHistory";
 import { createDomEditSaveQueue } from "../utils/domEditSaveQueue";
+import { flushStudioPendingEdits } from "../utils/studioPendingEdits";
 import { trackStudioEvent } from "../utils/studioTelemetry";
 
 // ── Types ──
@@ -135,6 +136,7 @@ export function usePreviewPersistence({
   }, []);
 
   const waitForPendingDomEditSaves = useCallback(async () => {
+    await flushStudioPendingEdits();
     await domEditSaveQueueRef.current?.waitForIdle();
   }, []);
 

@@ -14,7 +14,7 @@ export function StudioToast({ message, tone, onDismiss }: StudioToastProps) {
       style={onDismiss ? { cursor: "pointer" } : undefined}
     >
       <div
-        className="relative flex items-center gap-3 overflow-hidden rounded-2xl pl-4 pr-2 py-3 text-[12px]"
+        className="relative flex max-w-[min(420px,calc(100vw-48px))] items-center gap-3 overflow-hidden rounded-2xl py-3 pl-4 pr-2 text-[12px]"
         style={{
           background: isError
             ? "linear-gradient(135deg, rgba(127,29,29,0.55), rgba(80,10,10,0.45))"
@@ -29,7 +29,11 @@ export function StudioToast({ message, tone, onDismiss }: StudioToastProps) {
           ].join(", "),
         }}
       >
-        <span className={isError ? "text-red-200" : "text-neutral-200"}>{message}</span>
+        <span
+          className={`min-w-0 break-words leading-5 ${isError ? "text-red-200" : "text-neutral-200"}`}
+        >
+          {message}
+        </span>
         {onDismiss && (
           <button
             type="button"

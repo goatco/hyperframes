@@ -136,8 +136,7 @@ reload survival.
 - Fill color picker: opens with a hex input reflecting the current color; persist path verified
   green by the headless harness (fill style op); scripted popup commit was flaky (focus-sensitive
   popup), verified manually instead.
-- Color grading section absent for img/video: expected (flag `VITE_STUDIO_ENABLE_COLOR_GRADING`
-  defaults off).
+- Color grading section appears for img/video elements.
 - Automation notes: media/timing cells must run with the playhead inside the clip window (a
   data-start edit hides the element at t=0, which is correct but confuses naive re-runs); commit
   fires on Enter/blur only when the draft differs from the last value.

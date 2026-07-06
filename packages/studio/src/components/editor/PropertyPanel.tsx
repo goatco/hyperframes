@@ -22,11 +22,7 @@ import { TextSection, StyleSections } from "./propertyPanelSections";
 import { GsapAnimationSection } from "./GsapAnimationSection";
 import { PropertyPanel3dTransform } from "./propertyPanel3dTransform";
 import { KeyframeNavigation } from "./KeyframeNavigation";
-import {
-  STUDIO_COLOR_GRADING_ENABLED,
-  STUDIO_GSAP_PANEL_ENABLED,
-  STUDIO_KEYFRAMES_ENABLED,
-} from "./manualEditingAvailability";
+import { STUDIO_GSAP_PANEL_ENABLED, STUDIO_KEYFRAMES_ENABLED } from "./manualEditingAvailability";
 import { usePlayerStore, liveTime } from "../../player";
 import { TimingSection } from "./propertyPanelTimingSection";
 import { type PropertyPanelProps } from "./propertyPanelHelpers";
@@ -57,7 +53,9 @@ export const PropertyPanel = memo(function PropertyPanel({
   onSetStyle,
   onSetAttribute,
   onSetAttributeLive,
+  onApplyColorGradingScope,
   onSetHtmlAttribute,
+  onRemoveBackground,
   onSetManualOffset,
   onSetManualSize,
   onSetManualRotation,
@@ -352,6 +350,24 @@ export const PropertyPanel = memo(function PropertyPanel({
             onSetAttribute={onSetAttribute}
           />
         )}
+        {sections.colorGrading && (
+          <ColorGradingSection
+            key={[
+              element.id ?? "",
+              element.hfId ?? "",
+              element.selector ?? "",
+              String(element.selectorIndex ?? ""),
+            ].join("|")}
+            projectId={projectId}
+            element={element}
+            assets={assets}
+            previewIframeRef={previewIframeRef}
+            onImportAssets={onImportAssets}
+            onSetAttributeLive={onSetAttributeLive}
+            onApplyScope={onApplyColorGradingScope}
+          />
+        )}
+
         {sections.media && (
           <MediaSection
             projectDir={projectDir}
@@ -360,22 +376,7 @@ export const PropertyPanel = memo(function PropertyPanel({
             onSetStyle={onSetStyle}
             onSetAttribute={onSetAttribute}
             onSetHtmlAttribute={onSetHtmlAttribute}
-          />
-        )}
-
-        {STUDIO_COLOR_GRADING_ENABLED && sections.colorGrading && (
-          <ColorGradingSection
-            key={[
-              element.id ?? "",
-              element.hfId ?? "",
-              element.selector ?? "",
-              String(element.selectorIndex ?? ""),
-            ].join("|")}
-            element={element}
-            assets={assets}
-            previewIframeRef={previewIframeRef}
-            onImportAssets={onImportAssets}
-            onSetAttributeLive={onSetAttributeLive}
+            onRemoveBackground={onRemoveBackground}
           />
         )}
 

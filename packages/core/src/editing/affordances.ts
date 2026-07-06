@@ -182,7 +182,7 @@ function resolveCapabilities(facts: EditableElementFacts): DomEditCapabilities {
 export function resolveEditingSections(facts: EditableElementFacts): EditingSectionApplicability {
   return {
     text: facts.hasEditableText && !facts.isCompositionHost && !facts.isInsideLockedComposition,
-    media: facts.tag === "video" || facts.tag === "audio",
+    media: facts.tag === "video" || facts.tag === "audio" || facts.tag === "img",
     colorGrading: facts.tag === "video" || facts.tag === "img",
     timing: facts.hasTimingStart || facts.animationCount > 0,
     animation: facts.animationCount > 0,

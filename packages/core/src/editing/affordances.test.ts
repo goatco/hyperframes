@@ -127,9 +127,9 @@ describe("resolveEditingAffordances — sections", () => {
     expect(s).toMatchObject({ media: true, colorGrading: false });
   });
 
-  it("img: colorGrading but not media", () => {
+  it("img: media + colorGrading", () => {
     const s = resolveEditingAffordances(baseFacts({ tag: "img" })).sections;
-    expect(s).toMatchObject({ media: false, colorGrading: true });
+    expect(s).toMatchObject({ media: true, colorGrading: true });
   });
 
   it("editable text on a plain element: text section", () => {
