@@ -83,14 +83,15 @@ Pass assets as URL references your composition resolves at render time; don't in
 Media color grading can also read exact variable references inside
 `data-color-grading`. Use `$name` or `${name}` as the entire value for a field;
 the runtime resolves it from the current composition's variables before applying
-the shader grading:
+the shader grading, finishing details, blur/pixelate effects, and optional LUT:
 
 ```html compositions/hero.html
 <html data-composition-variables='[
-  {"id":"gradingPreset","type":"enum","label":"Color grading preset","default":"warm-clean",
-   "options":[{"value":"warm-clean","label":"Warm Clean"},{"value":"cool-clean","label":"Cool Clean"}]},
-  {"id":"gradingIntensity","type":"number","label":"Color grading intensity","default":0.75,"min":0,"max":1,"step":0.05},
-  {"id":"gradingExposure","type":"number","label":"Exposure","default":0,"min":-2,"max":2,"step":0.05}
+  {"id":"gradingPreset","type":"enum","label":"Preset","default":"natural-lift",
+   "options":[{"value":"natural-lift","label":"Natural Lift"},{"value":"warm-daylight","label":"Warm Daylight"}]},
+  {"id":"gradingIntensity","type":"number","label":"Preset strength","default":0.75,"min":0,"max":1,"step":0.05},
+  {"id":"gradingExposure","type":"number","label":"Exposure","default":0,"min":-2,"max":2,"step":0.05},
+  {"id":"gradingVibrance","type":"number","label":"Vibrance","default":0.08,"min":-1,"max":1,"step":0.01}
 ]'>
   <body>
     <div data-composition-id="hero" data-width="1920" data-height="1080">
@@ -104,7 +105,9 @@ the shader grading:
         data-color-grading='{
           "preset":"$gradingPreset",
           "intensity":"$gradingIntensity",
-          "adjust":{"exposure":"${gradingExposure}"},
+          "adjust":{"exposure":"${gradingExposure}","vibrance":"$gradingVibrance"},
+          "details":{"vignette":0.15,"vignetteFeather":0.72,"grain":0.08,"grainSize":0.25},
+          "effects":{"blur":0.1},
           "colorSpace":"rec709"
         }'
       ></video>
